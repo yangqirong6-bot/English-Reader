@@ -1,0 +1,2 @@
+dicts/*.mdx filter=lfs diff=lfs merge=lfs -text
+dicts/*.mdd filter=lfs diff=lfs merge=lfs -text
