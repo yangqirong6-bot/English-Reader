@@ -6,6 +6,8 @@ import { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } fro
 import Draggable from 'react-draggable';
 import type { DictResult } from '@/lib/dict-types';
 
+type DictApiResponse = DictResult | { html: string };
+
 // ─── Types ───────────────────────────────────────────
 interface WordToken {
   display: string;
@@ -519,7 +521,7 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
   const [text, setText] = useState('');
   const [parsed, setParsed] = useState(false);
   const [activeWord, setActiveWord] = useState<WordToken | null>(null);
-  const [dictData, setDictData] = useState<DictResult | null>(null);
+  const [dictData, setDictData] = useState<DictApiResponse | null>(null);
   const [isDictLoading, setIsDictLoading] = useState(false);
   const [vocab, setVocab] = useState<Set<string>>(new Set());
   const [playingSentenceId, setPlayingSentenceId] = useState<string | null>(null);
@@ -566,7 +568,7 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
           if (data.error) {
             setDictData(null);
           } else {
-            setDictData(data as DictResult);
+            setDictData(data as DictApiResponse);
           }
         } else {
           setDictData(null);
@@ -1187,6 +1189,11 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
                   </svg>
                   <span className="text-xs text-gray-400">Looking up &ldquo;{activeWord.clean}&rdquo;...</span>
                 </div>
+              ) : dictData && 'html' in dictData ? (
+                <div
+                  className="oxford-dict oxford-dict-content text-sm p-4 h-full w-full overflow-y-auto"
+                  dangerouslySetInnerHTML={{ __html: dictData.html }}
+                />
               ) : dictData ? (
                 <div className="flex min-h-0 flex-1 flex-col overflow-y-auto space-y-3">
                   {/* Phonetic + Part of Speech */}
