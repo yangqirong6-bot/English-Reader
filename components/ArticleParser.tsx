@@ -4,6 +4,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { speakSentence, stopPlayback } from '@/lib/azure-tts';
 import { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } from 'docx';
 import Draggable from 'react-draggable';
+import type { DictResult } from '@/lib/dict-types';
 
 // ─── Types ───────────────────────────────────────────
 interface WordToken {
@@ -518,18 +519,19 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
   const [text, setText] = useState('');
   const [parsed, setParsed] = useState(false);
   const [activeWord, setActiveWord] = useState<WordToken | null>(null);
-  const [dictDefinition, setDictDefinition] = useState<string | null>(null);
+  const [dictData, setDictData] = useState<DictResult | null>(null);
   const [isDictLoading, setIsDictLoading] = useState(false);
-  const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number } | null>(null);
   const [vocab, setVocab] = useState<Set<string>>(new Set());
   const [playingSentenceId, setPlayingSentenceId] = useState<string | null>(null);
   const [testMode, setTestMode] = useState(false);
   const [correctTestIds, setCorrectTestIds] = useState<Set<string>>(new Set());
   const [flashIds, setFlashIds] = useState<Set<string>>(new Set());
+  const [activeLineId, setActiveLineId] = useState<string | null>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const ttsAbortRef = useRef(false);
   const testInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+  const sentenceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const sentences = useMemo(() => {
     if (!parsed || !text.trim()) return [];
@@ -551,35 +553,26 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
         setPlayingSentenceId(null);
       }
 
-      // Calculate tooltip position
-      const rect = (e.target as HTMLElement).getBoundingClientRect();
-
-      let top = rect.top - 12 + window.scrollY;
-      let left = rect.left + rect.width / 2 + window.scrollX;
-
-      if (rect.top < 260) {
-        top = rect.bottom + 12 + window.scrollY;
-      }
-      if (left < 180) left = 180;
-      if (left > window.innerWidth - 180) left = window.innerWidth - 180;
-
       // Show tooltip immediately with loading state
       setActiveWord(word);
-      setTooltipPos({ top, left });
-      setDictDefinition(null);
+      setDictData(null);
       setIsDictLoading(true);
 
-      // Fetch from Oxford API
+      // Fetch dictionary definition
       try {
         const res = await fetch(`/api/dict?word=${encodeURIComponent(word.clean)}`);
         if (res.ok) {
           const data = await res.json();
-          setDictDefinition(data.html ?? null);
+          if (data.error) {
+            setDictData(null);
+          } else {
+            setDictData(data as DictResult);
+          }
         } else {
-          setDictDefinition(null);
+          setDictData(null);
         }
       } catch {
-        setDictDefinition(null);
+        setDictData(null);
       } finally {
         setIsDictLoading(false);
       }
@@ -594,23 +587,23 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
     const handleClickOutside = (e: MouseEvent) => {
       if (tooltipRef.current && !tooltipRef.current.contains(e.target as Node)) {
         setActiveWord(null);
-        setDictDefinition(null);
-        setTooltipPos(null);
+        setDictData(null);
+    
       }
     };
 
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setActiveWord(null);
-        setDictDefinition(null);
-        setTooltipPos(null);
+        setDictData(null);
+    
       }
     };
 
     const handleScroll = () => {
       setActiveWord(null);
-      setDictDefinition(null);
-      setTooltipPos(null);
+      setDictData(null);
+  
     };
 
     const id = setTimeout(() => {
@@ -634,14 +627,15 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
     stopPlayback();
     setParsed(true);
     setActiveWord(null);
-    setDictDefinition(null);
-    setTooltipPos(null);
+    setDictData(null);
+
     setPlayingSentenceId(null);
     if (testMode) {
       setTestMode(false);
       setCorrectTestIds(new Set());
       setFlashIds(new Set());
     }
+    setActiveLineId(null);
   }, [text, testMode]);
 
   // ── Text change handler ──
@@ -650,7 +644,7 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
       setText(e.target.value);
       if (parsed) setParsed(false);
       setActiveWord(null);
-      setDictDefinition(null);
+      setDictData(null);
       if (playingSentenceId) {
         ttsAbortRef.current = true;
         stopPlayback();
@@ -684,8 +678,8 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
   // ── Close dictionary ──
   const closeDict = useCallback(() => {
     setActiveWord(null);
-    setDictDefinition(null);
-    setTooltipPos(null);
+    setDictData(null);
+
   }, []);
 
   // ── Sentence TTS playback ──
@@ -704,8 +698,8 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
       stopPlayback();
       setPlayingSentenceId(sentenceId);
       setActiveWord(null);
-      setDictDefinition(null);
-      setTooltipPos(null);
+      setDictData(null);
+  
 
       try {
         await speakSentence(text);
@@ -744,8 +738,8 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
         stopPlayback();
         setPlayingSentenceId(null);
         setActiveWord(null);
-        setDictDefinition(null);
-        setTooltipPos(null);
+        setDictData(null);
+    
       }
       return next;
     });
@@ -787,6 +781,33 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
     },
     [],
   );
+
+  // Scroll-based active line detection
+  useEffect(() => {
+    if (!parsed || sentences.length === 0) return;
+
+    const handleScroll = () => {
+      const viewCenter = window.innerHeight / 2;
+      let closestId: string | null = null;
+      let closestDist = Infinity;
+
+      sentenceRefs.current.forEach((el, id) => {
+        const rect = el.getBoundingClientRect();
+        const elCenter = rect.top + rect.height / 2;
+        const dist = Math.abs(elCenter - viewCenter);
+        if (dist < closestDist) {
+          closestDist = dist;
+          closestId = id;
+        }
+      });
+
+      setActiveLineId((prev) => (prev !== closestId ? closestId : prev));
+    };
+
+    handleScroll(); // initial run
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [parsed, sentences]);
 
   // ── Export to Word ──
   const [exporting, setExporting] = useState(false);
@@ -967,19 +988,34 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
               .join(' ')
               .trim();
 
+            const isActiveLine = activeLineId === sentence.id;
+
             return (
               <div
                 key={sentence.id}
+                ref={(el) => {
+                  if (el) sentenceRefs.current.set(sentence.id, el);
+                  else sentenceRefs.current.delete(sentence.id);
+                }}
                 className={`
                   group relative flex items-start gap-2 rounded-xl px-3 py-2
                   transition-all duration-300
                   ${
                     isPlaying
                       ? 'bg-blue-50 shadow-sm ring-1 ring-blue-200'
-                      : 'hover:bg-gray-50/60'
+                      : isActiveLine
+                        ? ''
+                        : 'hover:bg-gray-50/60'
                   }
                 `}
               >
+                {/* Active-line highlight — pointer-events-none so clicks pass through */}
+                {isActiveLine && (
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 rounded-xl bg-gradient-to-r from-amber-100/70 via-amber-50/50 to-amber-100/70 ring-1 ring-amber-300/60"
+                  />
+                )}
                 {/* ── Sentence play button ── */}
                 {typeof window !== 'undefined' && window.speechSynthesis && (
                   <button
@@ -1101,19 +1137,14 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
 
       {/* ── Dictionary Popover ── */}
       {activeWord && (
-        <Draggable nodeRef={tooltipRef} handle=".drag-handle" bounds="body">
-          <div
-            ref={tooltipRef}
-            role="dialog"
-            aria-label={`Dictionary: ${activeWord.clean}`}
-            style={{
-              position: 'fixed',
-              top: tooltipPos?.top ?? 0,
-              left: tooltipPos?.left ?? 0,
-              zIndex: 50,
-            }}
-            className="flex flex-col resize overflow-hidden min-w-[300px] min-h-[250px] max-w-[90vw] max-h-[90vh] pb-8 animate-in fade-in slide-in-from-top-2 rounded-xl border border-gray-200 bg-white shadow-xl"
-          >
+        <div className="fixed top-[15%] left-1/2 -translate-x-1/2 z-[9999]">
+          <Draggable nodeRef={tooltipRef} handle=".drag-handle">
+            <div
+              ref={tooltipRef}
+              role="dialog"
+              aria-label={`Dictionary: ${activeWord.clean}`}
+              className="flex flex-col resize overflow-hidden min-w-[300px] min-h-[250px] max-w-[90vw] max-h-[90vh] pb-8 animate-in fade-in slide-in-from-top-2 rounded-xl border border-gray-200 bg-white shadow-xl"
+            >
             {/* Drag handle header */}
             <div className="drag-handle cursor-move flex-shrink-0 flex items-center justify-between border-b border-gray-100 bg-gray-50 px-4 py-2.5 rounded-t-xl">
               <div className="flex items-center gap-2 min-w-0">
@@ -1149,18 +1180,54 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
             {/* Body */}
             <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
               {isDictLoading ? (
-                <div className="flex flex-col items-center justify-center py-4 gap-2">
+                <div className="flex flex-col items-center justify-center py-8 gap-2">
                   <svg className="h-5 w-5 animate-spin text-indigo-400" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  <span className="text-xs text-gray-400">Retrieving Oxford Advanced Learner's Dictionary...</span>
+                  <span className="text-xs text-gray-400">Looking up &ldquo;{activeWord.clean}&rdquo;...</span>
                 </div>
-              ) : dictDefinition ? (
-                <div
-                  className="oxford-dict oxford-dict-content text-sm p-4 h-full w-full overflow-y-auto"
-                  dangerouslySetInnerHTML={{ __html: dictDefinition }}
-                />
+              ) : dictData ? (
+                <div className="flex min-h-0 flex-1 flex-col overflow-y-auto space-y-3">
+                  {/* Phonetic + Part of Speech */}
+                  {(dictData.phonetic || dictData.partOfSpeech) && (
+                    <div className="flex items-center gap-2 text-sm">
+                      {dictData.phonetic && (
+                        <span className="text-gray-500 font-mono">{dictData.phonetic}</span>
+                      )}
+                      {dictData.partOfSpeech && (
+                        <span className="inline-block rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-600 italic">
+                          {dictData.partOfSpeech}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* English definitions */}
+                  {dictData.enDefinitions.length > 0 && (
+                    <div>
+                      <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">English</span>
+                      <ol className="mt-1 space-y-1.5 list-decimal list-inside">
+                        {dictData.enDefinitions.map((def, i) => (
+                          <li key={i} className="text-sm text-gray-700 leading-relaxed">{def}</li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
+
+                  {/* Chinese definition */}
+                  {dictData.zhDefinition && (
+                    <div>
+                      <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">中文</span>
+                      <p className="mt-1 text-sm text-gray-700">{dictData.zhDefinition}</p>
+                    </div>
+                  )}
+
+                  {/* Source */}
+                  {dictData.source && (
+                    <p className="text-[10px] text-gray-300 text-right mt-2">{dictData.source}</p>
+                  )}
+                </div>
               ) : (
                 <p className="py-4 text-center text-sm text-gray-400">
                   No definition found for &ldquo;{activeWord.clean}&rdquo;
@@ -1196,7 +1263,8 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
               </svg>
             </div>
           </div>
-        </Draggable>
+          </Draggable>
+        </div>
       )}
     </div>
   );
