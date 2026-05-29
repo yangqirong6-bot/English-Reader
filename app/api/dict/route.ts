@@ -111,5 +111,22 @@ export async function GET(request: Request) {
     console.error('Online lookup error:', error);
   }
 
+  // ── Phase 3: Hyphenated word — try each segment ──
+  if (cleanWord.includes('-')) {
+    const parts = cleanWord.split('-').filter((p) => p.length > 0);
+    for (const part of parts.sort((a, b) => b.length - a.length)) {
+      try {
+        const dict = (globalThis as any).__oxfordDict as MDX;
+        const localResult = mdxLookup(dict, part);
+        if (localResult) return NextResponse.json(localResult);
+      } catch { /* continue */ }
+
+      try {
+        const onlineResult = await lookupWord(part);
+        if (onlineResult) return NextResponse.json(onlineResult);
+      } catch { /* continue */ }
+    }
+  }
+
   return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }

@@ -528,12 +528,10 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
   const [testMode, setTestMode] = useState(false);
   const [correctTestIds, setCorrectTestIds] = useState<Set<string>>(new Set());
   const [flashIds, setFlashIds] = useState<Set<string>>(new Set());
-  const [activeLineId, setActiveLineId] = useState<string | null>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const ttsAbortRef = useRef(false);
   const testInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
-  const sentenceRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const sentences = useMemo(() => {
     if (!parsed || !text.trim()) return [];
@@ -637,7 +635,6 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
       setCorrectTestIds(new Set());
       setFlashIds(new Set());
     }
-    setActiveLineId(null);
   }, [text, testMode]);
 
   // ── Text change handler ──
@@ -783,33 +780,6 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
     },
     [],
   );
-
-  // Scroll-based active line detection
-  useEffect(() => {
-    if (!parsed || sentences.length === 0) return;
-
-    const handleScroll = () => {
-      const viewCenter = window.innerHeight / 2;
-      let closestId: string | null = null;
-      let closestDist = Infinity;
-
-      sentenceRefs.current.forEach((el, id) => {
-        const rect = el.getBoundingClientRect();
-        const elCenter = rect.top + rect.height / 2;
-        const dist = Math.abs(elCenter - viewCenter);
-        if (dist < closestDist) {
-          closestDist = dist;
-          closestId = id;
-        }
-      });
-
-      setActiveLineId((prev) => (prev !== closestId ? closestId : prev));
-    };
-
-    handleScroll(); // initial run
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, [parsed, sentences]);
 
   // ── Export to Word ──
   const [exporting, setExporting] = useState(false);
@@ -990,34 +960,19 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
               .join(' ')
               .trim();
 
-            const isActiveLine = activeLineId === sentence.id;
-
             return (
               <div
                 key={sentence.id}
-                ref={(el) => {
-                  if (el) sentenceRefs.current.set(sentence.id, el);
-                  else sentenceRefs.current.delete(sentence.id);
-                }}
                 className={`
                   group relative flex items-start gap-2 rounded-xl px-3 py-2
                   transition-all duration-300
                   ${
                     isPlaying
                       ? 'bg-blue-50 shadow-sm ring-1 ring-blue-200'
-                      : isActiveLine
-                        ? ''
-                        : 'hover:bg-gray-50/60'
+                      : 'hover:bg-gray-50/60'
                   }
                 `}
               >
-                {/* Active-line highlight — pointer-events-none so clicks pass through */}
-                {isActiveLine && (
-                  <div
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-0 rounded-xl bg-gradient-to-r from-amber-100/70 via-amber-50/50 to-amber-100/70 ring-1 ring-amber-300/60"
-                  />
-                )}
                 {/* ── Sentence play button ── */}
                 {typeof window !== 'undefined' && window.speechSynthesis && (
                   <button
