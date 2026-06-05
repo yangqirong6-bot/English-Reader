@@ -522,6 +522,7 @@ interface ArticleParserProps {
 export default function ArticleParser({ onWordClick, placeholder, vocab, onToggleVocab }: ArticleParserProps) {
   const [text, setText] = useState('');
   const [parsed, setParsed] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [activeWord, setActiveWord] = useState<WordToken | null>(null);
   const [dictData, setDictData] = useState<DictApiResponse | null>(null);
   const [isDictLoading, setIsDictLoading] = useState(false);
@@ -623,7 +624,12 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
 
   // ── Parse handler ──
   const handleParse = useCallback(() => {
-    if (!text.trim()) return;
+    // Read directly from DOM to avoid stale React state during hydration
+    const currentText = textareaRef.current?.value ?? text;
+    if (!currentText.trim()) return;
+    if (!parsed || currentText !== text) {
+      setText(currentText);
+    }
     ttsAbortRef.current = true;
     stopPlayback();
     setParsed(true);
@@ -636,7 +642,7 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
       setCorrectTestIds(new Set());
       setFlashIds(new Set());
     }
-  }, [text, testMode]);
+  }, [text, testMode, parsed]);
 
   // ── Text change handler ──
   const handleTextChange = useCallback(
@@ -858,8 +864,7 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
 
           <button
             onClick={handleParse}
-            disabled={!hasText}
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 touch-manipulation min-h-[44px]"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />

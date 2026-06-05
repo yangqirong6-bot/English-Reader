@@ -21,7 +21,7 @@ export default function VocabularySidebar({ words, onRemove }: VocabularySidebar
   if (words.length === 0) return null;
 
   return (
-    <div className="w-56 flex-shrink-0">
+    <div className="w-full lg:w-56 flex-shrink-0">
       <div className="sticky top-4 rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100 px-4 py-3">
           <h2 className="text-sm font-semibold text-gray-800">生词本</h2>

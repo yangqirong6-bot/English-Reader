@@ -28,7 +28,7 @@ export default function Home() {
         </p>
       </div>
 
-      <div className="flex gap-6 justify-center">
+      <div className="flex flex-col lg:flex-row gap-6 justify-center">
         <div className="flex-1 min-w-0 max-w-3xl">
           <ArticleParser
             placeholder="Paste an English article here…"
