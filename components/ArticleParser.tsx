@@ -582,43 +582,24 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
     [onWordClick, playingSentenceId],
   );
 
-  // ── Close tooltip on outside click ──
+  // ── Close tooltip ──
   useEffect(() => {
     if (!activeWord) return;
-
-    const handleClickOutside = (e: MouseEvent) => {
-      if (tooltipRef.current && !tooltipRef.current.contains(e.target as Node)) {
-        setActiveWord(null);
-        setDictData(null);
-    
-      }
-    };
 
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setActiveWord(null);
         setDictData(null);
-    
       }
     };
 
-    const handleScroll = () => {
-      setActiveWord(null);
-      setDictData(null);
-  
-    };
-
     const id = setTimeout(() => {
-      document.addEventListener('click', handleClickOutside);
       document.addEventListener('keydown', handleEscape);
-      window.addEventListener('scroll', handleScroll, true);
     }, 0);
 
     return () => {
       clearTimeout(id);
-      document.removeEventListener('click', handleClickOutside);
       document.removeEventListener('keydown', handleEscape);
-      window.removeEventListener('scroll', handleScroll, true);
     };
   }, [activeWord]);
 
@@ -1131,7 +1112,7 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
             </div>
 
             {/* Body */}
-            <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
+            <div className="flex min-h-0 flex-1 flex-col px-4 py-3 overflow-y-auto overscroll-contain">
               {isDictLoading ? (
                 <div className="flex flex-col items-center justify-center py-8 gap-2">
                   <svg className="h-5 w-5 animate-spin text-indigo-400" fill="none" viewBox="0 0 24 24">
