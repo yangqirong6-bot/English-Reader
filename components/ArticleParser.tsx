@@ -515,15 +515,16 @@ function parseArticle(text: string): SentenceData[] {
 interface ArticleParserProps {
   onWordClick?: (word: string) => void;
   placeholder?: string;
+  vocab: Set<string>;
+  onToggleVocab: (word: string) => void;
 }
 
-export default function ArticleParser({ onWordClick, placeholder }: ArticleParserProps) {
+export default function ArticleParser({ onWordClick, placeholder, vocab, onToggleVocab }: ArticleParserProps) {
   const [text, setText] = useState('');
   const [parsed, setParsed] = useState(false);
   const [activeWord, setActiveWord] = useState<WordToken | null>(null);
   const [dictData, setDictData] = useState<DictApiResponse | null>(null);
   const [isDictLoading, setIsDictLoading] = useState(false);
-  const [vocab, setVocab] = useState<Set<string>>(new Set());
   const [playingSentenceId, setPlayingSentenceId] = useState<string | null>(null);
   const [testMode, setTestMode] = useState(false);
   const [correctTestIds, setCorrectTestIds] = useState<Set<string>>(new Set());
@@ -663,16 +664,6 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
     },
     [handleParse],
   );
-
-  // ── Toggle vocabulary ──
-  const toggleVocab = useCallback((word: string) => {
-    setVocab((prev) => {
-      const next = new Set(prev);
-      if (next.has(word)) next.delete(word);
-      else next.add(word);
-      return next;
-    });
-  }, []);
 
   // ── Close dictionary ──
   const closeDict = useCallback(() => {
@@ -840,7 +831,7 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
     } finally {
       setExporting(false);
     }
-  }, [vocab, sentences, exporting]);
+  }, [vocab, exporting]);
 
   // ── Derived state ──
   const hasText = text.trim().length > 0;
@@ -1201,7 +1192,7 @@ export default function ArticleParser({ onWordClick, placeholder }: ArticleParse
             {!isDictLoading && (
               <div className="flex-shrink-0 border-t border-gray-100 px-4 py-2.5">
                 <button
-                  onClick={(e) => { e.stopPropagation(); toggleVocab(activeWord.clean); }}
+                  onClick={(e) => { e.stopPropagation(); onToggleVocab(activeWord.clean); }}
                   className={`flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                     vocab.has(activeWord.clean)
                       ? 'bg-red-50 text-red-600 hover:bg-red-100'
