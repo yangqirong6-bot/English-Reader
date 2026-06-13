@@ -20,24 +20,23 @@ interface FreeDictEntry {
   meanings: FreeDictMeaning[];
 }
 
-const FREE_DICT_URL = 'https://api.dictionaryapi.dev/api/v2/entries/en/';
-
-async function fetchEnglishDefinition(word: string): Promise<{
+async function fetchFreeDictDefinition(word: string): Promise<{
   phonetic?: string;
   partOfSpeech?: string;
   enDefinitions: string[];
+  source: string;
 } | null> {
   try {
-    const res = await fetch(`${FREE_DICT_URL}${encodeURIComponent(word)}`, {
-      signal: AbortSignal.timeout(5000),
-    });
+    const res = await fetch(
+      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`,
+      { signal: AbortSignal.timeout(5000) },
+    );
     if (!res.ok) return null;
 
     const data: FreeDictEntry[] = await res.json();
     if (!data?.length) return null;
 
     const entry = data[0];
-
     const phonetic =
       entry.phonetic ||
       entry.phonetics?.find((p) => p.text)?.text ||
@@ -59,15 +58,142 @@ async function fetchEnglishDefinition(word: string): Promise<{
       phonetic,
       partOfSpeech: primaryPos,
       enDefinitions: enDefinitions.slice(0, 5),
+      source: 'Free Dictionary',
     };
   } catch {
     return null;
   }
 }
 
+// ─── Wiktionary API (English, free, no key) ──────────
+
+interface WiktionaryDefinition {
+  definition: string;
+  partOfSpeech?: string;
+}
+
+async function fetchWiktionaryDefinition(word: string): Promise<{
+  phonetic?: string;
+  partOfSpeech?: string;
+  enDefinitions: string[];
+  source: string;
+} | null> {
+  try {
+    const url = `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(word)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+
+    const data: Record<string, WiktionaryDefinition[]> = await res.json();
+    if (!data) return null;
+
+    const enDefinitions: string[] = [];
+    let primaryPos: string | undefined;
+
+    const langKey = Object.keys(data).find((k) => k === 'en') || Object.keys(data)[0];
+    if (!langKey || !data[langKey]) return null;
+
+    for (const item of data[langKey]) {
+      if (!primaryPos && item.partOfSpeech) primaryPos = item.partOfSpeech;
+      if (item.definition) {
+        const clean = item.definition.replace(/<[^>]+>/g, '');
+        enDefinitions.push(clean);
+      }
+    }
+
+    if (enDefinitions.length === 0) return null;
+
+    return {
+      partOfSpeech: primaryPos,
+      enDefinitions: enDefinitions.slice(0, 5),
+      source: 'Wiktionary',
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ─── Combined English lookup (parallel) ───────────────
+
+async function fetchEnglishDefinition(word: string): Promise<{
+  result: {
+    phonetic?: string;
+    partOfSpeech?: string;
+    enDefinitions: string[];
+  } | null;
+  source: string;
+}> {
+  // Fire both in parallel, take first success
+  const [freeDict, wiktionary] = await Promise.allSettled([
+    fetchFreeDictDefinition(word),
+    fetchWiktionaryDefinition(word),
+  ]);
+
+  if (freeDict.status === 'fulfilled' && freeDict.value) {
+    return { result: freeDict.value, source: freeDict.value.source };
+  }
+  if (wiktionary.status === 'fulfilled' && wiktionary.value) {
+    return { result: wiktionary.value, source: wiktionary.value.source };
+  }
+
+  return { result: null, source: 'Free Dictionary' };
+}
+
 // ─── Chinese Translation Providers ────────────────────
 
-// -- MyMemory (free, no API key) --
+// Google Translate (free, no key)
+async function translateWithGoogle(text: string): Promise<string | null> {
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q=${encodeURIComponent(text)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    // Response format: [[["translated text","original",...]],...]
+    const translated = data?.[0]?.[0]?.[0];
+    if (!translated || translated.toLowerCase() === text.toLowerCase()) return null;
+    return translated;
+  } catch {
+    return null;
+  }
+}
+
+// DeepL (requires API key)
+async function translateWithDeepL(text: string): Promise<string | null> {
+  const apiKey = process.env.DEEPL_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const isFree = apiKey.endsWith(':fx');
+    const baseUrl = isFree
+      ? 'https://api-free.deepl.com/v2/translate'
+      : 'https://api.deepl.com/v2/translate';
+
+    const params = new URLSearchParams({
+      text,
+      source_lang: 'EN',
+      target_lang: 'ZH',
+    });
+
+    const res = await fetch(baseUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `DeepL-Auth-Key ${apiKey}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: params.toString(),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!res.ok) return null;
+    const result = await res.json();
+    const translated = result?.translations?.[0]?.text;
+    if (!translated || translated.toLowerCase() === text.toLowerCase()) return null;
+    return translated;
+  } catch {
+    return null;
+  }
+}
+
+// MyMemory (free, no key)
 async function translateWithMyMemory(text: string): Promise<string | null> {
   try {
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|zh`;
@@ -82,7 +208,7 @@ async function translateWithMyMemory(text: string): Promise<string | null> {
   }
 }
 
-// -- Youdao (set YOUDAA_APP_KEY and YOUDAA_APP_SECRET in .env.local) --
+// Youdao (requires API key) — uses Node.js crypto, NOT Web crypto.subtle
 async function translateWithYoudao(text: string): Promise<string | null> {
   const appKey = process.env.YOUDAA_APP_KEY;
   const secret = process.env.YOUDAA_APP_SECRET;
@@ -90,11 +216,10 @@ async function translateWithYoudao(text: string): Promise<string | null> {
 
   try {
     const salt = Date.now().toString();
-    const encoder = new TextEncoder();
-    const data = encoder.encode(appKey + text + salt + secret);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const sign = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+    const sign = crypto
+      .createHash('sha256')
+      .update(appKey + text + salt + secret)
+      .digest('hex');
 
     const params = new URLSearchParams({
       q: text,
@@ -114,13 +239,15 @@ async function translateWithYoudao(text: string): Promise<string | null> {
 
     if (!res.ok) return null;
     const result = await res.json();
-    return result?.translation?.[0] || null;
+    const translated = result?.translation?.[0];
+    if (!translated || translated.toLowerCase() === text.toLowerCase()) return null;
+    return translated;
   } catch {
     return null;
   }
 }
 
-// -- Baidu (set BAIDU_TRANS_APP_ID and BAIDU_TRANS_KEY in .env.local) --
+// Baidu (requires API key)
 async function translateWithBaidu(text: string): Promise<string | null> {
   const appId = process.env.BAIDU_TRANS_APP_ID;
   const key = process.env.BAIDU_TRANS_KEY;
@@ -142,32 +269,48 @@ async function translateWithBaidu(text: string): Promise<string | null> {
       sign,
     });
 
-    const res = await fetch('https://fanyi-api.baidu.com/api/trans/vip/translate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: params.toString(),
-      signal: AbortSignal.timeout(5000),
-    });
+    const res = await fetch(
+      'https://fanyi-api.baidu.com/api/trans/vip/translate',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+        signal: AbortSignal.timeout(5000),
+      },
+    );
 
     if (!res.ok) return null;
     const result = await res.json();
-    return result?.trans_result?.[0]?.dst || null;
+    const translated = result?.trans_result?.[0]?.dst;
+    if (!translated || translated.toLowerCase() === text.toLowerCase()) return null;
+    return translated;
   } catch {
     return null;
   }
 }
 
-async function fetchChineseTranslation(word: string): Promise<string | null> {
-  // Try Youdao first if configured
-  const youdaoResult = await translateWithYoudao(word);
-  if (youdaoResult) return youdaoResult;
+// Run all translators in parallel, pick best result by priority
+export async function fetchChineseTranslation(word: string): Promise<{
+  text: string;
+  source: string;
+} | null> {
+  const results = await Promise.allSettled([
+    translateWithDeepL(word),
+    translateWithYoudao(word),
+    translateWithBaidu(word),
+    translateWithGoogle(word),
+    translateWithMyMemory(word),
+  ]);
 
-  // Try Baidu next if configured
-  const baiduResult = await translateWithBaidu(word);
-  if (baiduResult) return baiduResult;
+  const sources = ['DeepL', 'Youdao', 'Baidu', 'Google', 'MyMemory'];
 
-  // Fall back to MyMemory (free, no key required)
-  return translateWithMyMemory(word);
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === 'fulfilled' && r.value) {
+      return { text: r.value, source: sources[i] };
+    }
+  }
+  return null;
 }
 
 // ─── Main lookup ──────────────────────────────────────
@@ -176,30 +319,23 @@ export async function lookupWord(word: string): Promise<DictResult | null> {
   const clean = word.trim().toLowerCase();
   if (!clean) return null;
 
-  const [enResult, zhResult] = await Promise.all([
+  const [{ result: enResult, source: enSource }, zhResult] = await Promise.all([
     fetchEnglishDefinition(clean),
     fetchChineseTranslation(clean),
   ]);
 
-  // Discard translation if it just echoes the input
-  const zhDef = zhResult && zhResult.toLowerCase() !== clean ? zhResult : null;
-
-  if (!enResult && !zhDef) return null;
+  if (!enResult && !zhResult) return null;
 
   const providers: string[] = [];
-  if (enResult) providers.push('Free Dictionary');
-  if (zhDef) {
-    if (process.env.YOUDAA_APP_KEY) providers.push('Youdao');
-    else if (process.env.BAIDU_TRANS_APP_ID) providers.push('Baidu');
-    else providers.push('MyMemory');
-  }
+  if (enResult) providers.push(enSource);
+  if (zhResult) providers.push(zhResult.source);
 
   return {
     word: clean,
     phonetic: enResult?.phonetic,
     partOfSpeech: enResult?.partOfSpeech,
     enDefinitions: enResult?.enDefinitions ?? [],
-    zhDefinition: zhDef ?? undefined,
+    zhDefinition: zhResult?.text ?? undefined,
     source: providers.join(' + ') || undefined,
   };
 }

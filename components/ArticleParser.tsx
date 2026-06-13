@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { speakSentence, stopPlayback } from '@/lib/azure-tts';
+import { speakSentence, stopPlayback, speakWord } from '@/lib/azure-tts';
 import { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } from 'docx';
 import Draggable from 'react-draggable';
 import type { DictResult } from '@/lib/dict-types';
@@ -20,434 +20,6 @@ interface SentenceData {
   id: string;
 }
 
-interface DictEntry {
-  phonetic: string;
-  en: string;
-  zh: string;
-}
-
-interface TooltipState {
-  word: WordToken;
-  entry: DictEntry | null;
-  htmlDefinition: string | null;
-  top: number;
-  left: number;
-}
-
-// ─── Mock dictionary ─────────────────────────────────
-const MOCK_DICT: Record<string, DictEntry> = {
-  // Common prepositions & articles
-  the: { phonetic: '/ðə/', en: 'used to refer to a specific noun', zh: '（定冠词）这，那' },
-  a: { phonetic: '/ə/', en: 'used before a singular noun', zh: '一个' },
-  an: { phonetic: '/ən/', en: 'used before a vowel sound', zh: '一个' },
-  in: { phonetic: '/ɪn/', en: 'expressing location or time', zh: '在…里面' },
-  on: { phonetic: '/ɒn/', en: 'physically in contact with a surface', zh: '在…上面' },
-  at: { phonetic: '/æt/', en: 'expressing location or time', zh: '在（某处或某时）' },
-  to: { phonetic: '/tuː/', en: 'expressing direction or purpose', zh: '向，到' },
-  for: { phonetic: '/fɔːr/', en: 'indicating purpose or recipient', zh: '为了，给' },
-  with: { phonetic: '/wɪð/', en: 'accompanied by', zh: '和…一起' },
-  from: { phonetic: '/frʌm/', en: 'indicating origin or source', zh: '从，来自' },
-  by: { phonetic: '/baɪ/', en: 'indicating the agent or means', zh: '通过，由' },
-  as: { phonetic: '/æz/', en: 'used to indicate function or comparison', zh: '作为，如同' },
-  of: { phonetic: '/ɒv/', en: 'expressing relationship or belonging', zh: '…的' },
-
-  // Common verbs
-  is: { phonetic: '/ɪz/', en: 'third person singular of "be"', zh: '是' },
-  are: { phonetic: '/ɑːr/', en: 'plural present of "be"', zh: '是' },
-  was: { phonetic: '/wɒz/', en: 'first/third person past of "be"', zh: '（过去式）是' },
-  were: { phonetic: '/wɜːr/', en: 'plural past of "be"', zh: '（过去式）是' },
-  have: { phonetic: '/hæv/', en: 'to possess or own', zh: '有' },
-  has: { phonetic: '/hæz/', en: 'third person singular of "have"', zh: '有' },
-  had: { phonetic: '/hæd/', en: 'past tense of "have"', zh: '曾经有' },
-  do: { phonetic: '/duː/', en: 'to perform an action', zh: '做' },
-  does: { phonetic: '/dʌz/', en: 'third person singular of "do"', zh: '做' },
-  did: { phonetic: '/dɪd/', en: 'past tense of "do"', zh: '做了' },
-  say: { phonetic: '/seɪ/', en: 'to speak or utter', zh: '说' },
-  says: { phonetic: '/sez/', en: 'third person singular of "say"', zh: '说' },
-  said: { phonetic: '/sed/', en: 'past tense of "say"', zh: '说过' },
-  go: { phonetic: '/ɡəʊ/', en: 'to move or travel', zh: '去' },
-  get: { phonetic: '/ɡet/', en: 'to obtain or receive', zh: '得到' },
-  make: { phonetic: '/meɪk/', en: 'to create or produce', zh: '制作，使' },
-  made: { phonetic: '/meɪd/', en: 'past tense of "make"', zh: '制作了' },
-  take: { phonetic: '/teɪk/', en: 'to lay hold of', zh: '拿，取' },
-  see: { phonetic: '/siː/', en: 'to perceive with the eyes', zh: '看见' },
-  come: { phonetic: '/kʌm/', en: 'to approach or arrive', zh: '来' },
-  know: { phonetic: '/nəʊ/', en: 'to be aware of through observation', zh: '知道' },
-  think: { phonetic: '/θɪŋk/', en: 'to have a belief or opinion', zh: '认为，想' },
-  want: { phonetic: '/wɒnt/', en: 'to desire or wish for', zh: '想要' },
-  give: { phonetic: '/ɡɪv/', en: 'to freely transfer possession', zh: '给' },
-  use: { phonetic: '/juːz/', en: 'to employ for a purpose', zh: '使用' },
-  find: { phonetic: '/faɪnd/', en: 'to discover or locate', zh: '找到' },
-  tell: { phonetic: '/tel/', en: 'to communicate information', zh: '告诉' },
-  ask: { phonetic: '/ɑːsk/', en: 'to pose a question', zh: '问' },
-  work: { phonetic: '/wɜːk/', en: 'to perform a task or job', zh: '工作' },
-  seem: { phonetic: '/siːm/', en: 'to give the impression of', zh: '似乎' },
-  feel: { phonetic: '/fiːl/', en: 'to experience an emotion', zh: '感觉' },
-  try: { phonetic: '/traɪ/', en: 'to attempt or test', zh: '尝试' },
-  leave: { phonetic: '/liːv/', en: 'to go away from', zh: '离开' },
-  call: { phonetic: '/kɔːl/', en: 'to give a name or contact by phone', zh: '打电话，称呼' },
-  need: { phonetic: '/niːd/', en: 'to require something essential', zh: '需要' },
-  mean: { phonetic: '/miːn/', en: 'to intend to convey', zh: '意思是' },
-  keep: { phonetic: '/kiːp/', en: 'to continue to have', zh: '保持' },
-  let: { phonetic: '/let/', en: 'to allow or permit', zh: '让' },
-  begin: { phonetic: '/bɪˈɡɪn/', en: 'to start or commence', zh: '开始' },
-  become: { phonetic: '/bɪˈkʌm/', en: 'to turn into', zh: '变成' },
-  show: { phonetic: '/ʃəʊ/', en: 'to display or demonstrate', zh: '展示' },
-  hear: { phonetic: '/hɪər/', en: 'to perceive with the ear', zh: '听到' },
-  play: { phonetic: '/pleɪ/', en: 'to engage in an activity for fun', zh: '玩，播放' },
-  run: { phonetic: '/rʌn/', en: 'to move at a fast pace', zh: '跑' },
-  move: { phonetic: '/muːv/', en: 'to change position', zh: '移动' },
-  live: { phonetic: '/lɪv/', en: 'to be alive or reside', zh: '生活，居住' },
-  believe: { phonetic: '/bɪˈliːv/', en: 'to accept as true', zh: '相信' },
-  bring: { phonetic: '/brɪŋ/', en: 'to carry toward the speaker', zh: '带来' },
-  happen: { phonetic: '/ˈhæpən/', en: 'to occur or take place', zh: '发生' },
-  write: { phonetic: '/raɪt/', en: 'to compose text', zh: '写' },
-  provide: { phonetic: '/prəˈvaɪd/', en: 'to supply or make available', zh: '提供' },
-  sit: { phonetic: '/sɪt/', en: 'to be seated', zh: '坐' },
-  stand: { phonetic: '/stænd/', en: 'to be upright on the feet', zh: '站' },
-  lose: { phonetic: '/luːz/', en: 'to be deprived of', zh: '失去' },
-  pay: { phonetic: '/peɪ/', en: 'to give money for goods', zh: '支付' },
-  meet: { phonetic: '/miːt/', en: 'to encounter or come together', zh: '遇见' },
-  include: { phonetic: '/ɪnˈkluːd/', en: 'to contain as part of', zh: '包括' },
-  continue: { phonetic: '/kənˈtɪnjuː/', en: 'to keep doing without stopping', zh: '继续' },
-  set: { phonetic: '/set/', en: 'to put in a specific place', zh: '设置，放置' },
-  learn: { phonetic: '/lɜːn/', en: 'to gain knowledge or skill', zh: '学习' },
-  change: { phonetic: '/tʃeɪndʒ/', en: 'to make different', zh: '改变' },
-  lead: { phonetic: '/liːd/', en: 'to guide or direct', zh: '带领' },
-  understand: { phonetic: '/ˌʌndəˈstænd/', en: 'to comprehend', zh: '理解' },
-  watch: { phonetic: '/wɒtʃ/', en: 'to observe attentively', zh: '观看' },
-  follow: { phonetic: '/ˈfɒləʊ/', en: 'to come after or pursue', zh: '跟随' },
-  stop: { phonetic: '/stɒp/', en: 'to cease moving or operating', zh: '停止' },
-  create: { phonetic: '/kriˈeɪt/', en: 'to bring into existence', zh: '创造' },
-  speak: { phonetic: '/spiːk/', en: 'to talk or utter words', zh: '说话' },
-  read: { phonetic: '/riːd/', en: 'to interpret written text', zh: '阅读' },
-  allow: { phonetic: '/əˈlaʊ/', en: 'to permit or give permission', zh: '允许' },
-  add: { phonetic: '/æd/', en: 'to combine or join', zh: '添加' },
-  spend: { phonetic: '/spend/', en: 'to use time or money', zh: '花费' },
-  grow: { phonetic: '/ɡrəʊ/', en: 'to increase in size', zh: '成长' },
-  open: { phonetic: '/ˈəʊpən/', en: 'to move to an accessible position', zh: '打开' },
-  walk: { phonetic: '/wɔːk/', en: 'to move on foot', zh: '步行' },
-  win: { phonetic: '/wɪn/', en: 'to achieve victory', zh: '赢得' },
-  offer: { phonetic: '/ˈɒfər/', en: 'to present for acceptance', zh: '提供' },
-  remember: { phonetic: '/rɪˈmembər/', en: 'to recall to mind', zh: '记住' },
-  consider: { phonetic: '/kənˈsɪdər/', en: 'to think carefully about', zh: '考虑' },
-  appear: { phonetic: '/əˈpɪər/', en: 'to come into sight', zh: '出现' },
-  buy: { phonetic: '/baɪ/', en: 'to purchase with money', zh: '购买' },
-  serve: { phonetic: '/sɜːv/', en: 'to perform duties for', zh: '服务' },
-  die: { phonetic: '/daɪ/', en: 'to cease living', zh: '死亡' },
-  send: { phonetic: '/send/', en: 'to cause to be delivered', zh: '发送' },
-  build: { phonetic: '/bɪlt/', en: 'to construct', zh: '建造' },
-  stay: { phonetic: '/steɪ/', en: 'to remain in the same place', zh: '停留' },
-  fall: { phonetic: '/fɔːl/', en: 'to drop downward', zh: '落下' },
-  cut: { phonetic: '/kʌt/', en: 'to divide with a sharp tool', zh: '切割' },
-  reach: { phonetic: '/riːtʃ/', en: 'to stretch to touch', zh: '到达' },
-  kill: { phonetic: '/kɪl/', en: 'to cause death', zh: '杀死' },
-  remain: { phonetic: '/rɪˈmeɪn/', en: 'to continue to exist', zh: '保持，剩余' },
-  suggest: { phonetic: '/səˈdʒest/', en: 'to put forward for consideration', zh: '建议' },
-  raise: { phonetic: '/reɪz/', en: 'to lift upward', zh: '提高，举起' },
-  expect: { phonetic: '/ɪkˈspekt/', en: 'to regard as likely to happen', zh: '期待' },
-
-  // Nouns
-  time: { phonetic: '/taɪm/', en: 'the indefinite continued progress of existence', zh: '时间' },
-  year: { phonetic: '/jɪər/', en: 'the period of 365 days', zh: '年' },
-  people: { phonetic: '/ˈpiːpl/', en: 'human beings in general', zh: '人们' },
-  way: { phonetic: '/weɪ/', en: 'a method or manner of doing something', zh: '方式，路' },
-  day: { phonetic: '/deɪ/', en: 'a 24-hour period', zh: '天' },
-  thing: { phonetic: '/θɪŋ/', en: 'an object or entity', zh: '东西' },
-  man: { phonetic: '/mæn/', en: 'an adult male human', zh: '男人' },
-  woman: { phonetic: '/ˈwʊmən/', en: 'an adult female human', zh: '女人' },
-  child: { phonetic: '/tʃaɪld/', en: 'a young human being', zh: '孩子' },
-  world: { phonetic: '/wɜːld/', en: 'the earth and all its inhabitants', zh: '世界' },
-  life: { phonetic: '/laɪf/', en: 'the condition of being alive', zh: '生活，生命' },
-  hand: { phonetic: '/hænd/', en: 'the end part of the arm', zh: '手' },
-  part: { phonetic: '/pɑːt/', en: 'a piece or segment', zh: '部分' },
-  place: { phonetic: '/pleɪs/', en: 'a particular position or location', zh: '地方' },
-  case: { phonetic: '/keɪs/', en: 'an instance or occurrence', zh: '情况，案例' },
-  week: { phonetic: '/wiːk/', en: 'a period of seven days', zh: '周' },
-  company: { phonetic: '/ˈkʌmpəni/', en: 'a business organization', zh: '公司' },
-  system: { phonetic: '/ˈsɪstəm/', en: 'a set of connected parts', zh: '系统' },
-  program: { phonetic: '/ˈprəʊɡræm/', en: 'a planned series of events', zh: '计划，程序' },
-  question: { phonetic: '/ˈkwestʃən/', en: 'an inquiry or query', zh: '问题' },
-  government: { phonetic: '/ˈɡʌvənmənt/', en: 'the governing body of a nation', zh: '政府' },
-  number: { phonetic: '/ˈnʌmbər/', en: 'a count or quantity', zh: '数字' },
-  night: { phonetic: '/naɪt/', en: 'the period of darkness', zh: '夜晚' },
-  point: { phonetic: '/pɔɪnt/', en: 'a specific detail or location', zh: '点，要点' },
-  home: { phonetic: '/həʊm/', en: 'the place where one lives', zh: '家' },
-  water: { phonetic: '/ˈwɔːtər/', en: 'a transparent liquid essential for life', zh: '水' },
-  room: { phonetic: '/ruːm/', en: 'an area of a building', zh: '房间' },
-  mother: { phonetic: '/ˈmʌðər/', en: 'a female parent', zh: '母亲' },
-  father: { phonetic: '/ˈfɑːðər/', en: 'a male parent', zh: '父亲' },
-  family: { phonetic: '/ˈfæməli/', en: 'a group of related people', zh: '家庭' },
-  school: { phonetic: '/skuːl/', en: 'an educational institution', zh: '学校' },
-  state: { phonetic: '/steɪt/', en: 'a condition or territory', zh: '状态，州' },
-  eye: { phonetic: '/aɪ/', en: 'the organ of sight', zh: '眼睛' },
-  head: { phonetic: '/hed/', en: 'the upper part of the body', zh: '头' },
-  group: { phonetic: '/ɡruːp/', en: 'a number of people or things together', zh: '组，群体' },
-  country: { phonetic: '/ˈkʌntri/', en: 'a nation or territory', zh: '国家' },
-  problem: { phonetic: '/ˈprɒbləm/', en: 'a matter difficult to deal with', zh: '问题' },
-  fact: { phonetic: '/fækt/', en: 'a true piece of information', zh: '事实' },
-  right: { phonetic: '/raɪt/', en: 'a moral or legal entitlement; correct', zh: '权利，正确，正确的' },
-  study: { phonetic: '/ˈstʌdi/', en: 'the act of learning', zh: '学习，研究' },
-  book: { phonetic: '/bʊk/', en: 'a written or printed work', zh: '书' },
-  word: { phonetic: '/wɜːd/', en: 'a unit of language', zh: '单词' },
-  business: { phonetic: '/ˈbɪznəs/', en: 'commercial activity', zh: '商业' },
-  power: { phonetic: '/ˈpaʊər/', en: 'the ability to do something', zh: '力量，权力' },
-  city: { phonetic: '/ˈsɪti/', en: 'a large town', zh: '城市' },
-  market: { phonetic: '/ˈmɑːkɪt/', en: 'a regular gathering for trade', zh: '市场' },
-  community: { phonetic: '/kəˈmjuːnəti/', en: 'a group of people living together', zh: '社区' },
-  information: { phonetic: '/ˌɪnfəˈmeɪʃn/', en: 'data or knowledge', zh: '信息' },
-  children: { phonetic: '/ˈtʃɪldrən/', en: 'young human beings', zh: '孩子们' },
-  development: { phonetic: '/dɪˈveləpmənt/', en: 'the process of growing or improving', zh: '发展' },
-  education: { phonetic: '/ˌedʒuˈkeɪʃn/', en: 'the process of teaching and learning', zh: '教育' },
-  support: { phonetic: '/səˈpɔːt/', en: 'to bear all or part of the weight', zh: '支持' },
-  research: { phonetic: '/rɪˈsɜːtʃ/', en: 'systematic investigation', zh: '研究' },
-  difference: { phonetic: '/ˈdɪfrəns/', en: 'a way in which things are distinct', zh: '差异' },
-  experience: { phonetic: '/ɪkˈspɪriəns/', en: 'practical contact with events', zh: '经验，体验' },
-  result: { phonetic: '/rɪˈzʌlt/', en: 'a consequence or outcome', zh: '结果' },
-  society: { phonetic: '/səˈsaɪəti/', en: 'the community of people', zh: '社会' },
-  example: { phonetic: '/ɪɡˈzɑːmpl/', en: 'a thing characteristic of its kind', zh: '例子' },
-  morning: { phonetic: '/ˈmɔːrnɪŋ/', en: 'the early part of the day', zh: '早晨' },
-  moment: { phonetic: '/ˈməʊmənt/', en: 'a very brief period of time', zh: '瞬间' },
-  story: { phonetic: '/ˈstɔːri/', en: 'a narrative of events', zh: '故事' },
-  idea: { phonetic: '/aɪˈdɪə/', en: 'a thought or suggestion', zh: '想法' },
-  data: { phonetic: '/ˈdeɪtə/', en: 'facts and statistics collected together', zh: '数据' },
-
-  // Adjectives
-  good: { phonetic: '/ɡʊd/', en: 'to be desired or approved of', zh: '好的' },
-  new: { phonetic: '/njuː/', en: 'not existing before', zh: '新的' },
-  first: { phonetic: '/fɜːst/', en: 'coming before all others in time', zh: '第一的' },
-  last: { phonetic: '/lɑːst/', en: 'coming after all others', zh: '最后的' },
-  long: { phonetic: '/lɒŋ/', en: 'measuring a great distance or duration', zh: '长的' },
-  great: { phonetic: '/ɡreɪt/', en: 'of an extent considerably above average', zh: '伟大的，很' },
-  little: { phonetic: '/ˈlɪtl/', en: 'small in size or amount', zh: '小的' },
-  own: { phonetic: '/əʊn/', en: 'belonging to oneself', zh: '自己的' },
-  other: { phonetic: '/ˈʌðər/', en: 'different; not the same', zh: '其他的' },
-  old: { phonetic: '/əʊld/', en: 'having lived for a long time', zh: '老的，旧的' },
-  big: { phonetic: '/bɪɡ/', en: 'of considerable size', zh: '大的' },
-  high: { phonetic: '/haɪ/', en: 'of great vertical extent', zh: '高的' },
-  different: { phonetic: '/ˈdɪfrənt/', en: 'not the same as another', zh: '不同的' },
-  small: { phonetic: '/smɔːl/', en: 'little in size or degree', zh: '小的' },
-  large: { phonetic: '/lɑːdʒ/', en: 'of considerable size', zh: '大的' },
-  next: { phonetic: '/nekst/', en: 'coming immediately after', zh: '下一个的' },
-  early: { phonetic: '/ˈɜːli/', en: 'before the expected time', zh: '早的' },
-  young: { phonetic: '/jʌŋ/', en: 'having lived for a short time', zh: '年轻的' },
-  important: { phonetic: '/ɪmˈpɔːtnt/', en: 'of great significance', zh: '重要的' },
-  public: { phonetic: '/ˈpʌblɪk/', en: 'concerning the people as a whole', zh: '公共的' },
-  bad: { phonetic: '/bæd/', en: 'of poor quality or low standard', zh: '坏的' },
-  same: { phonetic: '/seɪm/', en: 'identical; not different', zh: '相同的' },
-  able: { phonetic: '/ˈeɪbl/', en: 'having the power to do something', zh: '能够的' },
-  possible: { phonetic: '/ˈpɒsəbl/', en: 'able to exist or happen', zh: '可能的' },
-  true: { phonetic: '/truː/', en: 'in accordance with fact', zh: '真实的' },
-  free: { phonetic: '/friː/', en: 'not confined or imprisoned', zh: '自由的' },
-  full: { phonetic: '/fʊl/', en: 'containing as much as possible', zh: '满的' },
-  sure: { phonetic: '/ʃʊər/', en: 'confident in what one thinks', zh: '确定的' },
-  strong: { phonetic: '/strɒŋ/', en: 'having great physical power', zh: '强壮的' },
-  special: { phonetic: '/ˈspeʃl/', en: 'better or greater than usual', zh: '特别的' },
-  clear: { phonetic: '/klɪər/', en: 'easy to perceive or understand', zh: '清楚的' },
-  hard: { phonetic: '/hɑːd/', en: 'solid and firm; difficult', zh: '困难的，硬的' },
-  ready: { phonetic: '/ˈredi/', en: 'fully prepared for something', zh: '准备好的' },
-  whole: { phonetic: '/həʊl/', en: 'complete; entire', zh: '全部的' },
-  recent: { phonetic: '/ˈriːsnt/', en: 'having happened not long ago', zh: '最近的' },
-  common: { phonetic: '/ˈkɒmən/', en: 'occurring or appearing frequently', zh: '常见的' },
-  human: { phonetic: '/ˈhjuːmən/', en: 'relating to people', zh: '人类的' },
-  natural: { phonetic: '/ˈnætʃrəl/', en: 'existing in nature', zh: '自然的' },
-  certain: { phonetic: '/ˈsɜːtn/', en: 'known for sure; specific', zh: '确定的，某些' },
-  available: { phonetic: '/əˈveɪləbl/', en: 'able to be used or obtained', zh: '可用的' },
-  likely: { phonetic: '/ˈlaɪkli/', en: 'probable; expected', zh: '可能的' },
-  simple: { phonetic: '/ˈsɪmpl/', en: 'easily understood; not complex', zh: '简单的' },
-
-  // Adverbs
-  not: { phonetic: '/nɒt/', en: 'used to form the negative', zh: '不' },
-  so: { phonetic: '/səʊ/', en: 'to such a great extent', zh: '所以，如此' },
-  very: { phonetic: '/ˈveri/', en: 'in a high degree', zh: '非常' },
-  just: { phonetic: '/dʒʌst/', en: 'exactly; only', zh: '正好，仅仅' },
-  also: { phonetic: '/ˈɔːlsəʊ/', en: 'in addition; too', zh: '也' },
-  only: { phonetic: '/ˈəʊnli/', en: 'solely; exclusively', zh: '仅仅' },
-  now: { phonetic: '/naʊ/', en: 'at the present moment', zh: '现在' },
-  then: { phonetic: '/ðen/', en: 'at that time', zh: '那时' },
-  here: { phonetic: '/hɪər/', en: 'in this place', zh: '这里' },
-  there: { phonetic: '/ðeər/', en: 'in that place', zh: '那里' },
-  well: { phonetic: '/wel/', en: 'in a good or satisfactory way', zh: '好地' },
-  even: { phonetic: '/ˈiːvn/', en: 'used for emphasis', zh: '甚至' },
-  still: { phonetic: '/stɪl/', en: 'up to this time', zh: '仍然' },
-  always: { phonetic: '/ˈɔːlweɪz/', en: 'at all times', zh: '总是' },
-  never: { phonetic: '/ˈnevər/', en: 'at no time', zh: '从不' },
-  often: { phonetic: '/ˈɒfn/', en: 'frequently', zh: '经常' },
-  sometimes: { phonetic: '/ˈsʌmtaɪmz/', en: 'occasionally', zh: '有时' },
-  again: { phonetic: '/əˈɡen/', en: 'once more', zh: '再次' },
-  too: { phonetic: '/tuː/', en: 'to a higher degree; also', zh: '太，也' },
-  much: { phonetic: '/mʌtʃ/', en: 'to a great extent', zh: '很多' },
-  really: { phonetic: '/ˈriːəli/', en: 'in actual fact; truly', zh: '真正地' },
-  already: { phonetic: '/ɔːlˈredi/', en: 'before a specified time', zh: '已经' },
-  quite: { phonetic: '/kwaɪt/', en: 'to a certain degree', zh: '相当' },
-  however: { phonetic: '/haʊˈevər/', en: 'used to introduce a contrasting point', zh: '然而' },
-  maybe: { phonetic: '/ˈmeɪbi/', en: 'perhaps; possibly', zh: '也许' },
-
-  // Question words
-  what: { phonetic: '/wɒt/', en: 'asking for information', zh: '什么' },
-  when: { phonetic: '/wen/', en: 'at what time', zh: '什么时候' },
-  where: { phonetic: '/weər/', en: 'in what place', zh: '哪里' },
-  why: { phonetic: '/waɪ/', en: 'for what reason', zh: '为什么' },
-  how: { phonetic: '/haʊ/', en: 'in what manner', zh: '如何' },
-  who: { phonetic: '/huː/', en: 'what person', zh: '谁' },
-  which: { phonetic: '/wɪtʃ/', en: 'asking for choice', zh: '哪一个' },
-
-  // Pronouns
-  i: { phonetic: '/aɪ/', en: 'oneself as a person', zh: '我' },
-  you: { phonetic: '/juː/', en: 'the person being addressed', zh: '你' },
-  he: { phonetic: '/hiː/', en: 'male person previously mentioned', zh: '他' },
-  she: { phonetic: '/ʃiː/', en: 'female person previously mentioned', zh: '她' },
-  it: { phonetic: '/ɪt/', en: 'a thing previously mentioned', zh: '它' },
-  we: { phonetic: '/wiː/', en: 'oneself and others', zh: '我们' },
-  they: { phonetic: '/ðeɪ/', en: 'people or things previously mentioned', zh: '他们' },
-  me: { phonetic: '/miː/', en: 'objective case of "I"', zh: '我（宾格）' },
-  him: { phonetic: '/hɪm/', en: 'objective case of "he"', zh: '他（宾格）' },
-  her: { phonetic: '/hɜːr/', en: 'objective case of "she"', zh: '她（宾格）' },
-  them: { phonetic: '/ðem/', en: 'objective case of "they"', zh: '他们（宾格）' },
-  my: { phonetic: '/maɪ/', en: 'belonging to me', zh: '我的' },
-  your: { phonetic: '/jɔːr/', en: 'belonging to you', zh: '你的' },
-  his: { phonetic: '/hɪz/', en: 'belonging to him', zh: '他的' },
-  its: { phonetic: '/ɪts/', en: 'belonging to it', zh: '它的' },
-  our: { phonetic: '/ˈaʊər/', en: 'belonging to us', zh: '我们的' },
-  their: { phonetic: '/ðeər/', en: 'belonging to them', zh: '他们的' },
-  this: { phonetic: '/ðɪs/', en: 'referring to a specific thing here', zh: '这个' },
-  that: { phonetic: '/ðæt/', en: 'referring to a specific thing there', zh: '那个' },
-  these: { phonetic: '/ðiːz/', en: 'plural of "this"', zh: '这些' },
-  those: { phonetic: '/ðəʊz/', en: 'plural of "that"', zh: '那些' },
-  some: { phonetic: '/sʌm/', en: 'an unspecified number or amount', zh: '一些' },
-  any: { phonetic: '/ˈeni/', en: 'one or some of a thing', zh: '任何' },
-  all: { phonetic: '/ɔːl/', en: 'the whole quantity of', zh: '所有' },
-  each: { phonetic: '/iːtʃ/', en: 'every one of two or more', zh: '每个' },
-  every: { phonetic: '/ˈevri/', en: 'all of a group', zh: '每一个' },
-  both: { phonetic: '/bəʊθ/', en: 'the two; the one as well as the other', zh: '两者' },
-  no: { phonetic: '/nəʊ/', en: 'not any; not one', zh: '没有，不' },
-
-  // Conjunctions
-  and: { phonetic: '/ænd/', en: 'in addition; plus', zh: '和，而且' },
-  but: { phonetic: '/bʌt/', en: 'used to introduce contrast', zh: '但是' },
-  or: { phonetic: '/ɔːr/', en: 'used to link alternatives', zh: '或者' },
-  because: { phonetic: '/bɪˈkɒz/', en: 'for the reason that', zh: '因为' },
-  if: { phonetic: '/ɪf/', en: 'on the condition that', zh: '如果' },
-  than: { phonetic: '/ðæn/', en: 'introducing a comparison', zh: '比' },
-  while: { phonetic: '/waɪl/', en: 'during the time that', zh: '当…时' },
-  although: { phonetic: '/ɔːlˈðəʊ/', en: 'in spite of the fact that', zh: '虽然' },
-  since: { phonetic: '/sɪns/', en: 'from a past time until now', zh: '自从，因为' },
-  unless: { phonetic: '/ʌnˈles/', en: 'except when', zh: '除非' },
-
-  // Misc
-  like: { phonetic: '/laɪk/', en: 'having similar qualities', zh: '像，喜欢' },
-  about: { phonetic: '/əˈbaʊt/', en: 'on the subject of', zh: '关于' },
-  into: { phonetic: '/ˈɪntə/', en: 'expressing movement to inside', zh: '进入' },
-  over: { phonetic: '/ˈəʊvər/', en: 'extending directly above', zh: '在…上方' },
-  after: { phonetic: '/ˈɑːftər/', en: 'in the time following', zh: '在…之后' },
-  before: { phonetic: '/bɪˈfɔːr/', en: 'during the period preceding', zh: '在…之前' },
-  between: { phonetic: '/bɪˈtwiːn/', en: 'in the space separating', zh: '在…之间' },
-  under: { phonetic: '/ˈʌndər/', en: 'directly below', zh: '在…下面' },
-  without: { phonetic: '/wɪðˈaʊt/', en: 'in the absence of', zh: '没有' },
-  through: { phonetic: '/θruː/', en: 'moving in one side and out another', zh: '通过' },
-  during: { phonetic: '/ˈdjʊərɪŋ/', en: 'throughout the course of', zh: '在…期间' },
-  around: { phonetic: '/əˈraʊnd/', en: 'on every side of', zh: '在…周围' },
-  against: { phonetic: '/əˈɡenst/', en: 'in opposition to', zh: '反对，靠着' },
-  among: { phonetic: '/əˈmʌŋ/', en: 'in the midst of', zh: '在…之中' },
-  across: { phonetic: '/əˈkrɒs/', en: 'from one side to the other', zh: '穿过' },
-  behind: { phonetic: '/bɪˈhaɪnd/', en: 'at the back of', zh: '在…后面' },
-  above: { phonetic: '/əˈbʌv/', en: 'in a higher position than', zh: '在…上面' },
-  along: { phonetic: '/əˈlɒŋ/', en: 'moving on a surface or line', zh: '沿着' },
-  within: { phonetic: '/wɪˈðɪn/', en: 'inside; not beyond', zh: '在…之内' },
-  beyond: { phonetic: '/bɪˈjɒnd/', en: 'at the far side of', zh: '超出' },
-  toward: { phonetic: '/təˈwɔːd/', en: 'in the direction of', zh: '朝向' },
-
-  // More academic / interesting words
-  significant: { phonetic: '/sɪɡˈnɪfɪkənt/', en: 'sufficiently great or important', zh: '显著的，重要的' },
-  opportunity: { phonetic: '/ˌɒpəˈtjuːnəti/', en: 'a set of circumstances making something possible', zh: '机会' },
-  environment: { phonetic: '/ɪnˈvaɪrənmənt/', en: 'the surroundings or conditions', zh: '环境' },
-  individual: { phonetic: '/ˌɪndɪˈvɪdʒuəl/', en: 'a single person or thing', zh: '个人，个体' },
-  particular: { phonetic: '/pəˈtɪkjʊlər/', en: 'used to single out an individual', zh: '特定的，特别的' },
-  economic: { phonetic: '/ˌiːkəˈnɒmɪk/', en: 'relating to the economy', zh: '经济的' },
-  political: { phonetic: '/pəˈlɪtɪkl/', en: 'relating to government or public affairs', zh: '政治的' },
-  population: { phonetic: '/ˌpɒpjuˈleɪʃn/', en: 'all the inhabitants of a place', zh: '人口' },
-  knowledge: { phonetic: '/ˈnɒlɪdʒ/', en: 'facts or information acquired through experience', zh: '知识' },
-  technology: { phonetic: '/tekˈnɒlədʒi/', en: 'the application of scientific knowledge', zh: '技术' },
-  strategy: { phonetic: '/ˈstrætədʒi/', en: 'a plan to achieve a long-term goal', zh: '策略' },
-  analysis: { phonetic: '/əˈnæləsɪs/', en: 'detailed examination of something', zh: '分析' },
-  identify: { phonetic: '/aɪˈdentɪfaɪ/', en: 'to establish who or what something is', zh: '识别，确认' },
-  establish: { phonetic: '/ɪˈstæblɪʃ/', en: 'to set up on a firm basis', zh: '建立' },
-  maintain: { phonetic: '/meɪnˈteɪn/', en: 'to keep in an existing state', zh: '维持' },
-  increase: { phonetic: '/ɪnˈkriːs/', en: 'to become greater in size or amount', zh: '增加' },
-  reduce: { phonetic: '/rɪˈdjuːs/', en: 'to make smaller or less', zh: '减少' },
-  improve: { phonetic: '/ɪmˈpruːv/', en: 'to make or become better', zh: '改善' },
-  concern: { phonetic: '/kənˈsɜːn/', en: 'a matter of interest or worry', zh: '关心，担忧' },
-  affect: { phonetic: '/əˈfekt/', en: 'to influence or have an effect on', zh: '影响' },
-  benefit: { phonetic: '/ˈbenɪfɪt/', en: 'an advantage or profit', zh: '好处' },
-  challenge: { phonetic: '/ˈtʃælɪndʒ/', en: 'a task or situation that tests abilities', zh: '挑战' },
-  current: { phonetic: '/ˈkʌrənt/', en: 'belonging to the present time', zh: '当前的' },
-  effective: { phonetic: '/ɪˈfektɪv/', en: 'successful in producing a desired result', zh: '有效的' },
-  emerge: { phonetic: '/ɪˈmɜːdʒ/', en: 'to come out into view', zh: '出现' },
-  focus: { phonetic: '/ˈfəʊkəs/', en: 'the center of interest or activity', zh: '焦点，集中' },
-  global: { phonetic: '/ˈɡləʊbl/', en: 'relating to the whole world', zh: '全球的' },
-  impact: { phonetic: '/ˈɪmpækt/', en: 'a marked effect or influence', zh: '影响' },
-  issue: { phonetic: '/ˈɪʃuː/', en: 'an important topic or problem', zh: '问题，议题' },
-  major: { phonetic: '/ˈmeɪdʒər/', en: 'important; serious; significant', zh: '主要的' },
-  process: { phonetic: '/ˈprəʊses/', en: 'a series of actions or steps', zh: '过程' },
-  require: { phonetic: '/rɪˈkwaɪər/', en: 'to need for a particular purpose', zh: '需要' },
-  resource: { phonetic: '/rɪˈsɔːs/', en: 'a supply that can be drawn upon', zh: '资源' },
-  response: { phonetic: '/rɪˈspɒns/', en: 'an answer or reaction', zh: '回应' },
-  source: { phonetic: '/sɔːs/', en: 'origin or starting point', zh: '来源' },
-  structure: { phonetic: '/ˈstrʌktʃər/', en: 'the arrangement of parts', zh: '结构' },
-  traditional: { phonetic: '/trəˈdɪʃənl/', en: 'existing in or as part of a tradition', zh: '传统的' },
-  variety: { phonetic: '/vəˈraɪəti/', en: 'diversity; a number of different things', zh: '多样性' },
-  achieve: { phonetic: '/əˈtʃiːv/', en: 'to reach or attain by effort', zh: '达到，实现' },
-  recognize: { phonetic: '/ˈrekəɡnaɪz/', en: 'to identify from previous encounters', zh: '认出，承认' },
-  indicate: { phonetic: '/ˈɪndɪkeɪt/', en: 'to point out or show', zh: '表明' },
-  generate: { phonetic: '/ˈdʒenəreɪt/', en: 'to produce or create', zh: '产生' },
-  define: { phonetic: '/dɪˈfaɪn/', en: 'to state the meaning of', zh: '定义' },
-  function: { phonetic: '/ˈfʌŋkʃn/', en: 'an activity or purpose natural to something', zh: '功能，函数' },
-  theory: { phonetic: '/ˈθɪəri/', en: 'a system of ideas explaining something', zh: '理论' },
-  concept: { phonetic: '/ˈkɒnsept/', en: 'an abstract idea or notion', zh: '概念' },
-  context: { phonetic: '/ˈkɒntekst/', en: 'the circumstances surrounding an event', zh: '上下文，背景' },
-};
-
-// ─── Dictionary API placeholder ─────────────────────
-export async function fetchDictionaryAPI(word: string): Promise<DictEntry | null> {
-  // TODO: Replace with real API call (e.g. Merriam-Webster, Oxford, Youdao)
-  // const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
-  // const data = await res.json();
-  // return { phonetic: data[0]?.phonetic, en: data[0]?.meanings[0]?.definitions[0]?.definition, zh: '...' };
-
-  // Fallback to local mock
-  const MOCK_LOOKUP: Record<string, DictEntry> = MOCK_DICT;
-
-  // Try exact match first
-  let entry = MOCK_LOOKUP[word.toLowerCase()];
-  if (entry) return entry;
-
-  // Try stripping common suffixes
-  const suffixes = ['s', 'es', 'ies', 'ed', 'd', 'ied', 'ing', 'ly', 'er', 'est', 'tion', 'ment'];
-  for (const suffix of suffixes) {
-    if (word.toLowerCase().endsWith(suffix)) {
-      const root = word.toLowerCase().slice(0, -suffix.length);
-      entry = MOCK_LOOKUP[root];
-      if (entry) return entry;
-      // try adding 'e' back (e.g. "baking" → "bake" → "bak" + "e")
-      if (MOCK_LOOKUP[root + 'e']) return MOCK_LOOKUP[root + 'e'];
-    }
-  }
-
-  return null;
-}
-
-// ─── Speech ──────────────────────────────────────────
-function speakWord(word: string) {
-  if (typeof window === 'undefined') return;
-  window.speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(word);
-  u.rate = 0.85;
-  u.lang = 'en-US';
-  const voices = window.speechSynthesis.getVoices();
-  const voice = voices.find((v) => v.lang.startsWith('en'));
-  if (voice) u.voice = voice;
-  window.speechSynthesis.speak(u);
-}
 
 // ─── Sentence splitting ─────────────────────────────
 function splitSentences(text: string): string[] {
@@ -491,13 +63,10 @@ function splitSentences(text: string): string[] {
 }
 
 // ─── Word tokenization ───────────────────────────────
-function tokenizeWords(sentence: string): WordToken[] {
+function tokenizeWords(sentence: string, sentenceIndex: number): WordToken[] {
   const parts = sentence.match(/\S+/g) || [];
-  let wordIdx = 0;
-  const sentId = Math.random().toString(36).slice(2, 8);
-
-  return parts.map((token) => {
-    const id = `${sentId}_${wordIdx++}`;
+  return parts.map((token, wordIdx) => {
+    const id = `s${sentenceIndex}_w${wordIdx}`;
     const clean = token.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '');
     return { display: token, clean, id };
   });
@@ -505,9 +74,9 @@ function tokenizeWords(sentence: string): WordToken[] {
 
 function parseArticle(text: string): SentenceData[] {
   const sentences = splitSentences(text);
-  return sentences.map((s) => ({
-    words: tokenizeWords(s),
-    id: Math.random().toString(36).slice(2, 10),
+  return sentences.map((s, i) => ({
+    words: tokenizeWords(s, i),
+    id: `sent_${i}`,
   }));
 }
 
@@ -530,10 +99,16 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
   const [testMode, setTestMode] = useState(false);
   const [correctTestIds, setCorrectTestIds] = useState<Set<string>>(new Set());
   const [flashIds, setFlashIds] = useState<Set<string>>(new Set());
+  const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const tooltipRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const ttsAbortRef = useRef(false);
   const testInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
+  const dictCacheRef = useRef<Map<string, DictApiResponse | null>>(new Map());
+  const [showTranslation, setShowTranslation] = useState(false);
+  const [sentenceTranslations, setSentenceTranslations] = useState<Map<string, string>>(new Map());
+  const [translationsLoading, setTranslationsLoading] = useState<Set<string>>(new Set());
+  const translationCacheRef = useRef<Map<string, string>>(new Map());
 
   const sentences = useMemo(() => {
     if (!parsed || !text.trim()) return [];
@@ -555,26 +130,50 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
         setPlayingSentenceId(null);
       }
 
+      // Position tooltip near clicked word
+      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      const tooltipWidth = 340;
+      const tooltipHeight = 300;
+      const top = Math.min(rect.bottom + 8, window.innerHeight - tooltipHeight - 16);
+      const left = Math.min(
+        Math.max(rect.left + rect.width / 2 - tooltipWidth / 2, 16),
+        window.innerWidth - tooltipWidth - 16,
+      );
+      setTooltipPos({ top, left });
+
       // Show tooltip immediately with loading state
       setActiveWord(word);
       setDictData(null);
       setIsDictLoading(true);
 
+      // Check cache first
+      const cacheKey = word.clean.toLowerCase();
+      const cached = dictCacheRef.current.get(cacheKey);
+      if (cached !== undefined) {
+        setDictData(cached);
+        setIsDictLoading(false);
+        return;
+      }
+
       // Fetch dictionary definition
       try {
         const res = await fetch(`/api/dict?word=${encodeURIComponent(word.clean)}`);
+        let result: DictApiResponse | null = null;
         if (res.ok) {
           const data = await res.json();
-          if (data.error) {
-            setDictData(null);
+          if (!data.error) {
+            result = data as DictApiResponse;
+            setDictData(result);
           } else {
-            setDictData(data as DictApiResponse);
+            setDictData(null);
           }
         } else {
           setDictData(null);
         }
+        dictCacheRef.current.set(cacheKey, result);
       } catch {
         setDictData(null);
+        dictCacheRef.current.set(cacheKey, null);
       } finally {
         setIsDictLoading(false);
       }
@@ -616,6 +215,9 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
     setParsed(true);
     setActiveWord(null);
     setDictData(null);
+    setSentenceTranslations(new Map());
+    setTranslationsLoading(new Set());
+    translationCacheRef.current.clear();
 
     setPlayingSentenceId(null);
     if (testMode) {
@@ -700,6 +302,72 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
       stopPlayback();
     };
   }, []);
+
+  // ── Translation fetching ──
+  useEffect(() => {
+    if (!showTranslation || sentences.length === 0) return;
+
+    let cancelled = false;
+
+    const fetchTranslations = async () => {
+      for (const sentence of sentences) {
+        if (cancelled) break;
+        const sentenceText = sentence.words
+          .map((w) => w.display)
+          .join(' ')
+          .trim();
+
+        // Skip if already loaded
+        if (sentenceTranslations.has(sentence.id)) continue;
+
+        // Check cache
+        const cacheKey = sentenceText;
+        if (translationCacheRef.current.has(cacheKey)) {
+          setSentenceTranslations((prev) => {
+            const next = new Map(prev);
+            next.set(sentence.id, translationCacheRef.current.get(cacheKey)!);
+            return next;
+          });
+          continue;
+        }
+
+        setTranslationsLoading((prev) => new Set(prev).add(sentence.id));
+
+        try {
+          const res = await fetch(
+            `/api/translate?text=${encodeURIComponent(sentenceText)}`,
+          );
+          if (res.ok && !cancelled) {
+            const data = await res.json();
+            if (data.translation) {
+              translationCacheRef.current.set(cacheKey, data.translation);
+              setSentenceTranslations((prev) => {
+                const next = new Map(prev);
+                next.set(sentence.id, data.translation);
+                return next;
+              });
+            }
+          }
+        } catch {
+          // ignore
+        } finally {
+          if (!cancelled) {
+            setTranslationsLoading((prev) => {
+              const next = new Set(prev);
+              next.delete(sentence.id);
+              return next;
+            });
+          }
+        }
+      }
+    };
+
+    fetchTranslations();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showTranslation, sentences]);
 
   // ── Test mode ──
   const toggleTestMode = useCallback(() => {
@@ -861,39 +529,57 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
               Ctrl / Cmd + Enter &middot; {parsedCount} words across {sentences.length} sentences
               {vocab.size > 0 && ` · ${vocab.size} saved`}
             </p>
-            {vocab.size > 0 && (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={exportToWord}
-                  disabled={exporting}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm shadow-violet-300 transition-all hover:from-violet-700 hover:to-indigo-700 hover:shadow-md hover:shadow-violet-400 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                  {exporting ? 'Generating...' : 'Export Word'}
-                </button>
-                <button
-                  onClick={toggleTestMode}
-                  className={`
-                    inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all
-                    ${
-                      testMode
-                        ? 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300 hover:bg-indigo-200'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }
-                  `}
-                >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    {testMode
-                      ? <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                      : <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    }
-                  </svg>
-                  {testMode ? 'Exit Test Mode' : 'Dictation Test'}
-                </button>
-              </div>
-            )}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowTranslation((prev) => !prev)}
+                className={`
+                  inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all
+                  ${
+                    showTranslation
+                      ? 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-300 hover:bg-emerald-200'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }
+                `}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+                </svg>
+                {showTranslation ? 'Hide Translation' : 'Translate'}
+              </button>
+              {vocab.size > 0 && (
+                <>
+                  <button
+                    onClick={exportToWord}
+                    disabled={exporting}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm shadow-violet-300 transition-all hover:from-violet-700 hover:to-indigo-700 hover:shadow-md hover:shadow-violet-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    {exporting ? 'Generating...' : 'Export Word'}
+                  </button>
+                  <button
+                    onClick={toggleTestMode}
+                    className={`
+                      inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all
+                      ${
+                        testMode
+                          ? 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300 hover:bg-indigo-200'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }
+                    `}
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      {testMode
+                        ? <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        : <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      }
+                    </svg>
+                    {testMode ? 'Exit Test Mode' : 'Dictation Test'}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -983,8 +669,9 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
                   </button>
                 )}
 
-                {/* ── Words ── */}
-                <p className="flex-1 leading-[2.2]">
+                {/* ── Words + Translation ── */}
+                <div className="flex-1 min-w-0">
+                <p className="leading-[2.2]">
                   {sentence.words.map((word) => {
                     const isSaved = vocab.has(word.clean);
 
@@ -1063,6 +750,20 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
                     );
                   })}
                 </p>
+
+                {/* ── Translation ── */}
+                {showTranslation && (
+                  translationsLoading.has(sentence.id) ? (
+                    <p className="mt-1 pl-2 border-l-2 border-gray-200 text-sm text-gray-400 animate-pulse">
+                      Translating...
+                    </p>
+                  ) : sentenceTranslations.has(sentence.id) ? (
+                    <p className="mt-1 pl-2 border-l-2 border-emerald-300 text-sm text-gray-600 leading-relaxed">
+                      {sentenceTranslations.get(sentence.id)}
+                    </p>
+                  ) : null
+                )}
+                </div>
               </div>
             );
           })}
@@ -1071,7 +772,7 @@ export default function ArticleParser({ onWordClick, placeholder, vocab, onToggl
 
       {/* ── Dictionary Popover ── */}
       {activeWord && (
-        <div className="fixed top-[15%] left-1/2 -translate-x-1/2 z-[9999]">
+        <div className="fixed z-[9999]" style={{ top: tooltipPos.top, left: tooltipPos.left }}>
           <Draggable nodeRef={tooltipRef} handle=".drag-handle">
             <div
               ref={tooltipRef}
